@@ -10,6 +10,7 @@ env/
 # ---- Secrets / local config (never push) ----
 .env
 .env.*
+!.env.example
 
 # ---- Downloaded / generated models & data ----
 # (re-downloadable / regenerable via the project's own scripts — do NOT ship)
