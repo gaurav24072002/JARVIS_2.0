@@ -1,0 +1,35 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.python-version
+
+# ---- Secrets / local config (never push) ----
+.env
+.env.*
+
+# ---- Downloaded / generated models & data ----
+# (re-downloadable / regenerable via the project's own scripts — do NOT ship)
+local_models/
+database/vector_store/
+database/chats_data/
+database/camera_captures/
+frontend/audio/
+certs/
+
+# ---- Large model weights, if ever dropped in the repo root ----
+*.gguf
+*.bin
+*.pt
+*.onnx
+
+# ---- OS cruft ----
+.DS_Store
+Thumbs.db
+
+# ---- Logs & temp ----
+*.log
+*.tmp

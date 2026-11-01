@@ -1,0 +1,44 @@
+Full name: Gaurav Maheshwari.
+Usual name: Gaurav.
+Date of birth : 24th July 2002.
+Originally from: Rajasthan, India. [REPORTED]
+Current/last reported residence: Pune, Maharashtra, India. [REPORTED]
+Prior internship location: Bangalore/Bengaluru, Karnataka, India. [REPORTED]
+Education connection: Chandigarh University, India.
+Schooling connection: Ajmer, Rajasthan appears in commented resume material;
+this does not independently establish his precise hometown.
+Country context: India.
+Preferred scheduling context: Indian Standard Time, Asia/Kolkata.
+Communication: uses English and Hindi/Hinglish in conversations; formal
+language proficiency levels have not been established.
+Occupation: Systems Reliability Engineer (SRE).
+Employer: Nutanix Technologies India Pvt. Ltd., last reported as of Oct 2026.
+
+Personal email: gaurav02maheshwari@gmail.com
+Mobile: +91 8890026771
+GitHub username: gaurav24072002
+GitHub: https://github.com/gaurav24072002
+Portfolio: https://gaurav-folio.netlify.app/
+LinkedIn displayed handle: gauravm-sre
+LinkedIn displayed URL: https://www.linkedin.com/in/gauravm-sre/
+
+Gaurav Maheshwari is a Systems Reliability Engineer last reported working
+at Nutanix in Pune, originally from Rajasthan. He completed a B.E. in
+Computer Science at Chandigarh University in 2024 with CGPA 8.3. His recurring
+professional areas are Linux, networking, storage, virtualization, production
+incident response, reliability, and Python/Bash automation. He is targeting
+stronger-growth SRE/DevOps/HFT or related infrastructure roles, with a broad
+compensation goal above INR 35 LPA, including opportunities abroad.
+
+He prefers practical, structured lessons explaining important concepts,
+functions, arguments, use cases, and reusable code, with checkpoints and
+minimal low-value detours. His learning interests include Python, Linux,
+SQL, Kubernetes, networking, OOP/LLD, data analysis, and agentic AI through
+LangChain, LangGraph, RAG, MCP, and MLOps. He is working toward a Jarvis-style
+personal assistant and wants this file to provide its personal context.
+
+Outside work, he enjoys fitness, running, travel, learning guitar,
+photography/vlogs, movies, chess, and spiritual reading. He reported being
+single in October 2026 and wants balanced progress in career, relationships,
+and health. Contact and social details, dates, evidence limitations, and
+historical versus current distinctions are recorded in the sections above.
