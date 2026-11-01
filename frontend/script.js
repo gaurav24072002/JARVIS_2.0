@@ -19,7 +19,7 @@ let orb = null;
 let recognition = null;
 let ttsPlayer = null;
 const SETTINGS_KEY = 'jarvis_settings';
-const DEFAULT_SETTINGS = { autoOpenActivity: true, autoOpenSearchResults: true, thinkingSounds: true, voiceInterrupt: true, handsFreeWake: true };
+const DEFAULT_SETTINGS = { autoOpenActivity: true, autoOpenSearchResults: true, thinkingSounds: false, voiceInterrupt: true, handsFreeWake: true };
 const PRE_STARTER_FILES = ['starter_1', 'starter_2', 'starter_3', 'starter_4', 'starter_5', 'starter_6', 'starter_7', 'starter_8', 'starter_9', 'starter_10'];
 let PRE_STARTER_CACHE = {};
 let settings = { ...DEFAULT_SETTINGS };
@@ -746,6 +746,7 @@ function exitStandby() {
 function onWakeActivated(source, command) {
     if (isListening || isStreaming) return;
     exitStandby();
+    shutdownStandbyArmed = false;   // the next shutdown may re-arm standby again
     playWakeChime();
     if (command) {
         // "wake up jarvis, play despacito" — the command already arrived with the phrase
@@ -804,6 +805,59 @@ function isShutdownCommand(text) {
     return SHUTDOWN_PATTERNS.some(r => r.test(t));
 }
 
+const SHUTDOWN_GOODBYE = 'Goodbye, sir. Powering down. Say "wake up Jarvis" or "hey Jarvis" whenever you need me back.';
+
+let shutdownStandbyArmed = false;     // set once the post-shutdown standby has been armed
+function armStandbyForShutdown() {
+    if (shutdownStandbyArmed) return;
+    shutdownStandbyArmed = true;
+    if (typeof enterStandby === 'function') enterStandby({ claps: false });
+    if (wakeStandby) showToast('Standing by, sir — say "wake up Jarvis" to bring me back.');
+}
+
+/* Synthesize arbitrary text via the /tts endpoint (cloned JARVIS voice) and play it
+   through the gapless TTS player. Used for canned lines the LLM never sees — e.g. the
+   shutdown goodbye, which is intercepted client-side and never streamed back by the LLM. */
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+        fr.onerror = () => reject(new Error('Failed to read audio blob'));
+        fr.readAsDataURL(blob);
+    });
+}
+async function speakText(text, onComplete) {
+    let finished = false;
+    const done = () => { if (!finished) { finished = true; if (onComplete) onComplete(); } };
+    if (!text || !ttsPlayer || !ttsPlayer.enabled) { done(); return; }
+    ttsPlayer.reset();                 // clean slate: clear stopped state + prior audio
+    // Chain onComplete after the existing playback-complete handler (the usual
+    // auto-listen restart) and restore it; fire it immediately on the failure
+    // paths where no audio will ever play.
+    const prev = ttsPlayer.onPlaybackComplete;
+    ttsPlayer.onPlaybackComplete = () => {
+        if (typeof prev === 'function') prev();
+        ttsPlayer.onPlaybackComplete = prev;
+        done();
+    };
+    try {
+        const res = await fetch(`${API}/tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+        });
+        if (!res.ok) { ttsPlayer.onPlaybackComplete = prev; done(); return; }
+        const blob = await res.blob();
+        const b64 = await blobToBase64(blob);
+        ttsPlayer.enqueue(b64);
+        ttsPlayer.finish();
+    } catch (e) {
+        ttsPlayer.onPlaybackComplete = prev;
+        console.warn('speakText failed:', e);
+        done();
+    }
+}
+
 function handleShutdown(rawText) {
     // 1. Stop auto-listen + mic
     autoListenMode = false;
@@ -820,20 +874,24 @@ function handleShutdown(rawText) {
     if (preStarterPlayer) { try { preStarterPlayer.stop(); } catch (_) {} }
     // 3. Reflect it in the UI
     addMessage('user', rawText);
-    addMessage('assistant', 'Goodbye, sir. Powering down. Say "wake up Jarvis" or "hey Jarvis" whenever you need me back.');
+    addMessage('assistant', SHUTDOWN_GOODBYE);
     if (statusText) statusText.textContent = 'Standing by';
     showToast('Jarvis is standing by. Mic is off — "wake up Jarvis" brings it back.');
     if (messageInput) messageInput.value = '';
-    // 4. Re-arm hands-free standby — WAKE WORD ONLY.
-    //    (Standby had exited when the previous wake happened, so nothing is
-    //    listening now unless we start it again. Claps are latched OFF for
-    //    the rest of the session; only a spoken wake word brings it back.)
+    // 3b. Latch the clap wake OFF for the rest of the session (claps stay dead
+    //     after the first shutdown; only a spoken wake word brings it back).
     clapsEnabled = false;
     stopClapDetector(); // release the mic stream in case claps were active
-    setTimeout(() => {
-        if (typeof enterStandby === 'function') enterStandby({ claps: false });
-        if (wakeStandby) showToast('Standing by, sir — say "wake up Jarvis" to bring me back.');
-    }, 800);
+    // 4. Speak the goodbye in the cloned voice (async), then arm hands-free
+    //    standby — WAKE WORD ONLY — when the line FINISHES. The goodbye itself
+    //    says "wake up Jarvis", so starting the wake-word mic mid-line would
+    //    let JARVIS hear its own voice and re-wake (echo loop). autoListenMode
+    //    is already false, so the playback-complete handler won't re-arm the
+    //    normal mic. The 20 s safety net covers the paths where playback never
+    //    completes (TTS off, both backends down); it is idempotent with the
+    //    completion hook.
+    speakText(SHUTDOWN_GOODBYE, armStandbyForShutdown);
+    setTimeout(armStandbyForShutdown, 20000);
 }
 
 function startCamera() {
@@ -1764,9 +1822,6 @@ async function sendMessage(textOverride) {
     let timeoutId = null;
     const controller = new AbortController();
     try {
-        if (ttsPlayer?.enabled && settings.thinkingSounds && preStarterPlayer) {
-            preStarterPlayer.play(() => {});
-        }
         timeoutId = setTimeout(() => controller.abort(), 300000);
         const res = await fetch(`${API}${endpoint}`, {
             method: 'POST',

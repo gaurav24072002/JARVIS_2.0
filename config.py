@@ -30,6 +30,14 @@ VISION_MAX_IMAGE_BYTES = int(os.getenv("VISION_MAX_IMAGE_BYTES", "5000000"))
 TTS_VOICE = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
 TTS_RATE = os.getenv("TTS_RATE", "+8%")
 TTS_PITCH = os.getenv("TTS_PITCH", "-8Hz")
+# --- TTS engine: "voicestudio" (cloned JARVIS voice, falls back to edge_tts on any error) or "edge_tts" ---
+TTS_ENGINE = os.getenv("TTS_ENGINE", "voicestudio").strip().lower()
+VOICESTUDIO_URL = os.getenv("VOICESTUDIO_URL", "http://127.0.0.1:3900").rstrip("/")
+VOICESTUDIO_MODEL = os.getenv("VOICESTUDIO_MODEL", "omnivoice").strip()
+# Cloned voice profile id or unique name (from POST /profiles). Empty = VoiceStudio default voice.
+VOICESTUDIO_VOICE = os.getenv("VOICESTUDIO_VOICE", "").strip()
+VOICESTUDIO_SPEED = float(os.getenv("VOICESTUDIO_SPEED", "1.08"))
+VOICESTUDIO_TIMEOUT = int(os.getenv("VOICESTUDIO_TIMEOUT", "120"))
 # EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_MODEL = "./local_models/all-MiniLM-L6-v2"
 CHUNK_SIZE = 1000

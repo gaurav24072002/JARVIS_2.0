@@ -16,7 +16,8 @@ listening. Say *"shut down"* to power the mic off; a spoken wake word brings it 
 
 ## Features
 
-- 🎙️ **Voice in / voice out** — speech-to-text and text-to-speech (edge-tts), gapless streaming
+- 🎙️ **Voice in / voice out** — speech-to-text and text-to-speech, gapless streaming
+- 🎭 **Cloned JARVIS voice** — zero-shot voice cloning via [VoiceStudio](https://github.com/debpalash/VoiceStudio) (OmniVoice, local GPU), with automatic edge-tts fallback
 - 🧠 **Local LLM brain** — Ollama (`nemotron-3.5-lightning` by default), no cloud keys
 - 👁️ **Vision** — point the camera, ask what it sees (uses `llava`)
 - 🔎 **Web search** — Tavily (optional; everything else works without it)
@@ -32,7 +33,8 @@ listening. Say *"shut down"* to power the mic off; a spoken wake word brings it 
 ```
 browser (frontend/)                FastAPI (app/main.py)
   speech-to-text   ───────────►   /chat/stream, /realtime, /tts ...
-  MediaSource audio ◄───────────    edge-tts (streamed per sentence)
+  MediaSource audio ◄───────────    VoiceStudio TTS (cloned JARVIS voice, :3900)
+                                    └─ edge-tts fallback (if VoiceStudio is down)
                                      │
                               chat_service / realtime_service
                                      │
@@ -221,9 +223,15 @@ All settings live in `.env` (or the process environment). Defaults shown in `con
 | `OLLAMA_REQUEST_TIMEOUT` | `120` | LLM request timeout (seconds) |
 | `TAVILY_API_KEY` | *(empty)* | Web search key; empty = search disabled |
 | `JARVIS_HTTPS` | `1` | Serve over HTTPS (`0` = plain HTTP, mic won't work over LAN IP) |
-| `TTS_VOICE` | `en-GB-RyanNeural` | edge-tts voice (try `en-GB-ThomasNeural`) |
-| `TTS_RATE` | `+8%` | Speech speed |
-| `TTS_PITCH` | `-8Hz` | Pitch offset (lower = deeper) |
+| `TTS_ENGINE` | `voicestudio` | `voicestudio` = cloned voice (auto-fallback to edge-tts); `edge_tts` = classic only |
+| `VOICESTUDIO_URL` | `http://127.0.0.1:3900` | VoiceStudio backend address |
+| `VOICESTUDIO_MODEL` | `omnivoice` | Cloning engine |
+| `VOICESTUDIO_VOICE` | *(empty)* | Cloned voice profile id/name (from `enroll_voice.py`); empty = default voice |
+| `VOICESTUDIO_SPEED` | `1.08` | Speech speed (0.25–4.0) |
+| `VOICESTUDIO_TIMEOUT` | `120` | Per-sentence request timeout (s) |
+| `TTS_VOICE` | `en-GB-RyanNeural` | edge-tts fallback voice (try `en-GB-ThomasNeural`) |
+| `TTS_RATE` | `+8%` | Fallback speech speed |
+| `TTS_PITCH` | `-8Hz` | Fallback pitch offset (lower = deeper) |
 | `ASSISTANT_NAME` | `Jarvis` | Name the assistant uses for itself |
 | `JARVIS_USER_TITLE` | *(empty)* | How to address you (e.g. `Sir`) |
 | `JARVIS_OWNER_NAME` | *(empty)* | Owner name referenced in the persona |
@@ -252,13 +260,45 @@ outside the allowed area.
 
 ## TTS / voice
 
-Text-to-speech uses [edge-tts](https://github.com/rany2/edge-tts). Sentences are
-generated on the server as they stream and pushed to the browser, where a
+Text-to-speech runs through two engines, in order:
+
+1. **VoiceStudio** ([debpalash/VoiceStudio](https://github.com/debpalash/VoiceStudio),
+   OmniVoice zero-shot voice cloning on the local GPU) — speaks with the **cloned JARVIS
+   voice**. Installed at `~/JARVIS/voicestudio/` (outside this repo).
+2. **edge-tts** — automatic fallback whenever VoiceStudio is down or a request fails,
+   so the assistant never goes silent.
+
+Sentences are generated on the server as they stream and pushed to the browser, where a
 **MediaSource** pipeline plays them **gaplessly** (no per-sentence reload lag). Browsers
 without MediaSource automatically fall back to per-chunk playback.
 
-To change the voice, set `TTS_VOICE` in `.env` (e.g. `en-GB-ThomasNeural`) and restart.
-Sample clips for comparison live in `frontend/audio/voice_samples/` (generated, git-ignored).
+### Setting up the cloned voice
+
+```bash
+# 1. Start VoiceStudio (one-time model download ~2.4 GB on first synth; needs CUDA)
+cd ~/JARVIS/voicestudio
+uv sync --locked
+uv run python -m backend.main          # listens on 127.0.0.1:3900, runs on GPU
+
+# 2. Enroll a clean JARVIS voice clip (10-30 s, no background noise)
+cd ~/JARVIS/JARVIS
+venv/bin/python enroll_voice.py path/to/jarvis_clip.mp3 --name JARVIS
+#    → prints: VOICESTUDIO_VOICE=<profile-id>
+
+# 3. Paste that line into .env and restart JARVIS
+```
+
+- Re-enroll with a better clip anytime — the new profile id just replaces the old one.
+- `GET http://127.0.0.1:3900/profiles` lists enrolled voices; `GET /v1/audio/voices`
+  lists voices + engines; `GET /health` checks device/version.
+- To switch back to classic voices entirely: `TTS_ENGINE=edge_tts` in `.env`.
+- Tuning: `VOICESTUDIO_SPEED` (default 1.08 ≈ the old `+8%`); fallback tone via
+  `TTS_VOICE` / `TTS_RATE` / `TTS_PITCH`.
+- Sample clips for comparison live in `frontend/audio/voice_samples/` (generated, git-ignored).
+
+> **Legal note:** voice cloning a real actor's voice (e.g. JARVIS from the films) is fine
+> for personal, offline use — but don't publish or commercially use output that
+> impersonates a living person. The OmniVoice model is licensed **CC-BY-NC** (non-commercial).
 
 ---
 
@@ -275,6 +315,10 @@ Sample clips for comparison live in `frontend/audio/voice_samples/` (generated, 
 | **Port 8000 in use** | Stop the other process, or change the port in `run.py`. |
 | **Slow / first run long** | The Ollama model loads into memory on first use; it's warm afterwards. |
 | **Want a deeper / calmer voice** | Lower `TTS_PITCH` (e.g. `-12Hz`), adjust `TTS_RATE`. |
+| **Voice sounds like edge-tts, not the clone** | Check the startup log line `[TTS] Engine: …`. If it says `edge-tts`, VoiceStudio is down or `VOICESTUDIO_VOICE` is unset — start it (`uv run python -m backend.main`), enroll a clip, set the profile id, restart. |
+| **Log shows `[TTS] VoiceStudio unavailable (429 …)`** | This is *not* a fault — it's VoiceStudio's GPU admission control refusing a request because its worker pool is saturated. Ollama holds most of the V100's VRAM, so VoiceStudio floors to **1 GPU worker**; JARVIS now serializes its TTS calls and retries a 429 twice (honouring `Retry-After`) before falling back. It only drops to edge-tts if the pool is still busy ~15 s on. To give VoiceStudio more headroom, cap Ollama's VRAM (`OLLAMA_KV_CACHE_*` / a smaller model) or raise `OMNIVOICE_GPU_WORKERS` in VoiceStudio's env if you have spare VRAM. |
+| **First spoken sentence is slow** | One-time model load / warm-up in VoiceStudio (~50 s); afterwards it's ~0.5–1.5 s per sentence. |
+| **HTTP 403 "Licence not accepted" in VoiceStudio** | Accept the model licenses once (the UI does this; headless: `POST /models/licenses/accept`). |
 
 ---
 

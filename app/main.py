@@ -18,6 +18,8 @@ import base64
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import edge_tts
+import requests
+import threading
 from app.models import ChatRequest, ChatResponse, TTSRequest
 
 RATE_LIMIT_MESSAGE = (
@@ -43,6 +45,8 @@ from config import (
     VECTOR_STORE_DIR, OLLAMA_BASE_URL, OLLAMA_MODEL, TAVILY_API_KEY,
     EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHAT_HISTORY_TURNS,
     ASSISTANT_NAME, TTS_VOICE, TTS_RATE, TTS_PITCH,
+    TTS_ENGINE, VOICESTUDIO_URL, VOICESTUDIO_MODEL, VOICESTUDIO_VOICE,
+    VOICESTUDIO_SPEED, VOICESTUDIO_TIMEOUT,
 )
 
 logging.basicConfig(
@@ -130,6 +134,20 @@ async def lifespan(app: FastAPI):
         )
 
         logger.info("Chat service initialized successfully")
+
+        # TTS engine check
+        if TTS_ENGINE == "voicestudio":
+            try:
+                health = requests.get(f"{VOICESTUDIO_URL}/health", timeout=3)
+                status = health.json() if health.ok else f"HTTP {health.status_code}"
+                voice = VOICESTUDIO_VOICE or "(default — no cloned voice enrolled yet)"
+                logger.info("[TTS] Engine: VoiceStudio (%s) — voice: %s | %s", VOICESTUDIO_MODEL, voice, status)
+            except Exception as exc:
+                logger.warning("[TTS] Engine: VoiceStudio (%s) NOT REACHABLE at %s (%s) — edge-tts will handle all speech until it is up",
+                               VOICESTUDIO_MODEL, VOICESTUDIO_URL, exc)
+        else:
+            logger.info("[TTS] Engine: edge-tts (%s)", TTS_VOICE)
+
         logger.info("=" * 60)
         logger.info("Service Status:")
         logger.info("  - Vector Store: Ready")
@@ -140,6 +158,7 @@ async def lifespan(app: FastAPI):
         logger.info("  - Background Task Manager: Ready")
         logger.info("  - Vision (Ollama): Ready")
         logger.info("  - Chat Service: Ready")
+        logger.info("  - TTS (%s, edge-tts fallback): Ready", TTS_ENGINE)
         logger.info("=" * 60)
         logger.info("J.A.R.V.I.S is online and ready!")
         logger.info("API: http://localhost:8000")
@@ -331,7 +350,52 @@ def _merge_short(sentences):
     return merged
 
 
-def _generate_tts_sync(text: str, voice: str, rate: str, pitch: str) -> bytes:
+# VoiceStudio on this box runs a single GPU worker — Ollama holds most of the V100's
+# VRAM, so only ~2 GB is free and the pool floors to 1 worker. Its admission control
+# answers HTTP 429 to any request submitted while one is already queued (a guard
+# against a VRAM OOM crash). Fanning out N sentences at once therefore 429s N-1 of
+# them and drops us onto the fallback voice. So we (a) keep exactly one request in
+# flight at a time, and (b) retry briefly on 429 — in case the backend's own UI or an
+# enrollment saturates the pool. Only if it's still busy (or down) do we fall back.
+_vs_lock = threading.Lock()
+_VOICESTUDIO_MAX_ATTEMPTS = 3
+_VOICESTUDIO_RETRY_CAP_S = 15.0
+
+
+def _tts_voicestudio(text: str) -> bytes:
+    """Synthesize via VoiceStudio (cloned JARVIS voice). Returns MP3 bytes."""
+    url = f"{VOICESTUDIO_URL}/v1/audio/speech"
+    payload = {
+        "model": VOICESTUDIO_MODEL,
+        "input": text,
+        "voice": VOICESTUDIO_VOICE or "default",
+        "response_format": "mp3",
+        "speed": VOICESTUDIO_SPEED,
+    }
+    with _vs_lock:  # one request in flight at a time → never trips the 429 gate ourselves
+        for attempt in range(1, _VOICESTUDIO_MAX_ATTEMPTS + 1):
+            resp = requests.post(url, json=payload, timeout=VOICESTUDIO_TIMEOUT)
+            if resp.status_code == 429 and attempt < _VOICESTUDIO_MAX_ATTEMPTS:
+                try:
+                    wait = float(resp.headers.get("Retry-After", "2"))
+                except ValueError:
+                    wait = 2.0
+                wait = max(1.0, min(wait, _VOICESTUDIO_RETRY_CAP_S))
+                logger.info(
+                    "[TTS] VoiceStudio busy (429) — retry %d/%d in %.1fs",
+                    attempt, _VOICESTUDIO_MAX_ATTEMPTS - 1, wait,
+                )
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()  # non-429, or retries exhausted → caller falls back
+            audio = resp.content
+            if not audio:
+                raise RuntimeError("VoiceStudio returned empty audio")
+            return audio
+    raise RuntimeError("VoiceStudio synthesis failed (retries exhausted)")
+
+
+def _tts_edge(text: str, voice: str, rate: str, pitch: str) -> bytes:
     async def _inner():
         communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
         parts = []
@@ -343,6 +407,17 @@ def _generate_tts_sync(text: str, voice: str, rate: str, pitch: str) -> bytes:
         return b"".join(parts)
 
     return asyncio.run(_inner())
+
+
+def _generate_tts(text: str) -> bytes:
+    """Synthesize one sentence. VoiceStudio first (cloned voice), edge-tts as
+    automatic fallback so the assistant never goes silent."""
+    if TTS_ENGINE == "voicestudio":
+        try:
+            return _tts_voicestudio(text)
+        except Exception as exc:
+            logger.warning("[TTS] VoiceStudio unavailable (%s); falling back to edge-tts", exc)
+    return _tts_edge(text, TTS_VOICE, TTS_RATE, TTS_PITCH)
 
 
 _tts_pool = ThreadPoolExecutor(max_workers=4)
@@ -362,7 +437,7 @@ def _stream_generator(session_id: str, chunk_iter, is_realtime: bool, tts_enable
         if not text or not text.strip():
             return
 
-        audio_queue.append((_tts_pool.submit(_generate_tts_sync, text, TTS_VOICE, TTS_RATE, TTS_PITCH), text))
+        audio_queue.append((_tts_pool.submit(_generate_tts, text), text))
         last_submit_time = time.perf_counter()
 
     def _drain_ready():
@@ -693,10 +768,10 @@ async def text_to_speech(request: TTSRequest):
 
     async def generate():
         try:
-            communicate = edge_tts.Communicate(text=text, voice=TTS_VOICE, rate=TTS_RATE, pitch=TTS_PITCH)
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    yield chunk["data"]
+            audio = await asyncio.to_thread(_generate_tts, text)
+            step = 32 * 1024
+            for i in range(0, len(audio), step):
+                yield audio[i:i + step]
         except Exception as e:
             logger.error("[TTS] Error generating speech: %s", e)
 
